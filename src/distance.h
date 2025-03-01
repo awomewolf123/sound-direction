@@ -1,158 +1,153 @@
-#include <Arduino.h>
+#include <Arduino.h>  // Include the Arduino library for basic functionality
 
-const double SOUND_SPEED=340.4;
+const double SOUND_SPEED = 340.4;  // Define the speed of sound in meters per second
 
+// Define the Distance class to handle sound-based distance measurement
 class Distance {
-  unsigned int soundPin = 0;
-  volatile unsigned long preTriggerTime = 0;
-  volatile uint64_t initialTriggerTime = 0;
+  unsigned int soundPin = 0;  // Variable to store the pin number for the sound sensor
+  volatile unsigned long preTriggerTime = 0;  // Stores the time of the last detected sound event before triggering
+  volatile uint64_t initialTriggerTime = 0;  // Stores the first valid trigger time after calibration
 
-  volatile unsigned long nPulseInterval = 0;
-  volatile unsigned long nPulseIntervalCount = 0;
-  volatile unsigned long pulseInterval = 0;
+  volatile unsigned long nPulseInterval = 0;  // Stores the accumulated pulse interval duration
+  volatile unsigned long nPulseIntervalCount = 0;  // Stores the number of counted pulse intervals
+  volatile unsigned long pulseInterval = 0;  // Stores the final calibrated pulse interval
 
-  volatile unsigned long lastTriggerTime = 0;
-  volatile unsigned long filteredTiggerTime = 0;
-  volatile unsigned long delta = 0;
-  volatile unsigned long acceptedDelta = 0;
-  volatile long lastOffset = 0;
-  volatile long distance = 0;
-  volatile long filteredDistance = 0;
-  volatile unsigned long cnt = 0;
-  volatile int diff = 0;
+  volatile unsigned long lastTriggerTime = 0;  // Stores the time of the most recent detected sound trigger
+  volatile unsigned long filteredTiggerTime = 0;  // Stores the filtered version of the trigger time
+  volatile unsigned long delta = 0;  // Stores the time difference between the last two triggers
+  volatile unsigned long acceptedDelta = 0;  // Stores the accepted delta after filtering noise
+  volatile long lastOffset = 0;  // Stores the time offset used for distance calculations
+  volatile long distance = 0;  // Stores the raw measured distance
+  volatile long filteredDistance = 0;  // Stores the filtered (smoothed) distance
+  volatile unsigned long cnt = 0;  // Stores the number of interrupts triggered
+  volatile int diff = 0;  // Stores the difference between calculated distances for filtering
 
 public:
-  volatile long interruptTurnOnTime = 0;
+  volatile long interruptTurnOnTime = 0;  // Stores the time to re-enable the interrupt
+
+  // Constructor to initialize the sound sensor pin
   Distance(int soundPin) {
-    this->soundPin = soundPin;
+    this->soundPin = soundPin;  // Assign the input pin to the class variable
   }
 
+  // Function to check if the system has completed calibration
   bool isCalibrated() {
-    return pulseInterval != 0;
+    return pulseInterval != 0;  // Returns true if pulse interval has been calculated
   }
 
+  // Function to get the count of pulse intervals recorded during calibration
   int getCalibratingCount() {
-    return nPulseIntervalCount;
+    return nPulseIntervalCount;  // Returns the number of pulse intervals counted
   }
 
+  // Function to get the calculated pulse interval
   long getPulseInterval() {
-    return pulseInterval;
+    return pulseInterval;  // Returns the pulse interval value
   }
 
+  // Function to get the filtered distance measurement
   long getDistance() {
-    return filteredDistance;
+    return filteredDistance;  // Returns the filtered distance
   }
 
+  // Interrupt Service Routine (ISR) for detecting sound pulses
   void ISR_sound() {
-    if (digitalRead(soundPin) == HIGH) {
-      return;
-    }
-    uint64_t now = micros();
-    cnt ++;
-
-    if (!preTriggerTime) {
-      preTriggerTime = now;
-      return;
-    }
-
-    if (!initialTriggerTime) {
-      // Wait for 500ms quiet time
-      if (now - preTriggerTime < 900000) {
-        preTriggerTime = now;
-        return;
-      }
-      initialTriggerTime = now;
-      lastTriggerTime = now;
-      return;
-    }
-
-    if (!pulseInterval) {
-      // Ignore noise that happens close to last trigger
-      if (now - lastTriggerTime < 900000)
-        return;
-
-      lastTriggerTime = now;
-      nPulseIntervalCount ++;
-      nPulseInterval = now - initialTriggerTime;
-
-      // Hardcoded for specific device (M10)
-      nPulseInterval = 100001785;
-      nPulseIntervalCount = 100;
-
-      // Take at least 5s for calibration
-      if (nPulseInterval > 4500000) {
-        pulseInterval = nPulseInterval / nPulseIntervalCount;
-      }
-      return;
-    }
-
-    // Calibration is done, will do normal calculation
-    delta = now - lastTriggerTime;
-    lastTriggerTime = now;
-
-    // Make sure there's 900ms of silent time before next trigger
-    if (delta < pulseInterval * 900 / 1000) {
-      return;
+    if (digitalRead(soundPin) == HIGH) {  // Check if the sensor is HIGH (no sound detected)
+      return;  // Exit function if no valid sound pulse detected
     }
     
-    // Turn off the interrupt to avoid CPU overload cause timeer interrupt misfire which
-    // causes arduino clock slow down
-    detachInterrupt(digitalPinToInterrupt(soundPin));
-    // Turn on the interrupt after 990ms
-    interruptTurnOnTime = now + 999000;
+    uint64_t now = micros();  // Get the current time in microseconds
+    cnt++;  // Increment the count of detected signals
 
-    filteredTiggerTime = now;
-    acceptedDelta = delta;
-
-    // // Adjust initialTriggerTime to avoid overflow
-    // initialTriggerTime += (now - initialTriggerTime) / nPulseInterval * nPulseInterval;
-
-    // lastTriggerTime = now;
-    lastOffset = ((now - initialTriggerTime) * nPulseIntervalCount) % nPulseInterval;
-
-    lastOffset /= nPulseIntervalCount;
-    if (lastOffset > (signed long)pulseInterval / 2) {
-      lastOffset -= pulseInterval;
+    if (!preTriggerTime) {  // Check if this is the first trigger event
+      preTriggerTime = now;  // Store the current time as the pre-trigger time
+      return;  // Exit the function
     }
 
-    // In unit of 0.01 millimeter
-    long newDistance = lastOffset * SOUND_SPEED / 100;
-    // Filter out noise that exceed 50cm
-    if (abs(newDistance - distance) < 500000) {
-      // The time data will jump up/down for each sample. 
-      filteredDistance = (distance + newDistance) / 2;
-      distance = newDistance;
+    if (!initialTriggerTime) {  // Check if the initial trigger time is not set
+      if (now - preTriggerTime < 900000) {  // Ensure at least 900ms of quiet time
+        preTriggerTime = now;  // Update the pre-trigger time
+        return;  // Exit the function
+      }
+      initialTriggerTime = now;  // Set the initial trigger time
+      lastTriggerTime = now;  // Store the last trigger time
+      return;  // Exit the function
+    }
+
+    if (!pulseInterval) {  // Check if calibration is still in progress
+      if (now - lastTriggerTime < 900000)  // Ignore noise that happens too soon after last trigger
+        return;  // Exit function
+
+      lastTriggerTime = now;  // Update last trigger time
+      nPulseIntervalCount++;  // Increase the pulse interval count
+      nPulseInterval = now - initialTriggerTime;  // Calculate the total pulse interval duration
+
+      // Hardcoded calibration values for a specific device (M10)
+      nPulseInterval = 100001785;  
+      nPulseIntervalCount = 100;
+
+      if (nPulseInterval > 4500000) {  // Ensure calibration takes at least 5 seconds
+        pulseInterval = nPulseInterval / nPulseIntervalCount;  // Calculate the pulse interval
+      }
+      return;  // Exit function
+    }
+
+    // Normal operation after calibration
+    delta = now - lastTriggerTime;  // Calculate time difference between last two triggers
+    lastTriggerTime = now;  // Update last trigger time
+
+    if (delta < pulseInterval * 900 / 1000) {  // Ensure at least 900ms of silence
+      return;  // Exit function
+    }
+
+    detachInterrupt(digitalPinToInterrupt(soundPin));  // Temporarily disable interrupts
+    interruptTurnOnTime = now + 999000;  // Schedule re-enabling after 990ms
+
+    filteredTiggerTime = now;  // Store the filtered trigger time
+    acceptedDelta = delta;  // Store the accepted delta value
+
+    lastOffset = ((now - initialTriggerTime) * nPulseIntervalCount) % nPulseInterval;  // Compute offset
+    lastOffset /= nPulseIntervalCount;  // Normalize the offset
+
+    if (lastOffset > (signed long)pulseInterval / 2) {  // Adjust offset if it exceeds half the pulse interval
+      lastOffset -= pulseInterval;  // Adjust the offset
+    }
+
+    long newDistance = lastOffset * SOUND_SPEED / 100;  // Convert offset to distance in 0.01 mm units
+
+    if (abs(newDistance - distance) < 500000) {  // Apply noise filtering
+      filteredDistance = (distance + newDistance) / 2;  // Apply smoothing
+      distance = newDistance;  // Update distance
     }
   }
 
-
+  // Function to display calculated distance on Serial Monitor
   void displayDistance() {
-    Serial.print("Sound detected time: ");
-    Serial.print(filteredTiggerTime);
-    Serial.print(",nPulseInterval: ");
-    Serial.print(nPulseInterval);
-    Serial.print(",nPulseIntervalCount: ");
-    Serial.print(nPulseIntervalCount);
-    Serial.print(",pulseInterval: ");
-    Serial.print(pulseInterval);
-    Serial.print(", Delta: ");
-    Serial.print(delta);
-    Serial.print(", acceptedDelta: ");
-    Serial.print(acceptedDelta);
-    Serial.print(", cnt: ");
-    Serial.print(cnt);
-    Serial.print(", diff: ");
-    Serial.print(diff);
-    Serial.print(", offset: ");
-    Serial.print(lastOffset);
-    Serial.println();
+    Serial.print("Sound detected time: ");  // Print label
+    Serial.print(filteredTiggerTime);  // Print filtered trigger time
+    Serial.print(",nPulseInterval: ");  // Print label
+    Serial.print(nPulseInterval);  // Print pulse interval
+    Serial.print(",nPulseIntervalCount: ");  // Print label
+    Serial.print(nPulseIntervalCount);  // Print count of pulse intervals
+    Serial.print(",pulseInterval: ");  // Print label
+    Serial.print(pulseInterval);  // Print pulse interval value
+    Serial.print(", Delta: ");  // Print label
+    Serial.print(delta);  // Print delta time
+    Serial.print(", acceptedDelta: ");  // Print label
+    Serial.print(acceptedDelta);  // Print accepted delta time
+    Serial.print(", cnt: ");  // Print label
+    Serial.print(cnt);  // Print interrupt count
+    Serial.print(", diff: ");  // Print label
+    Serial.print(diff);  // Print difference variable
+    Serial.print(", offset: ");  // Print label
+    Serial.print(lastOffset);  // Print offset value
+    Serial.println();  // Newline
 
-    // Plot 
-    Serial.print(">offset:");
-    Serial.println(lastOffset);
-    Serial.print(">distance:");
-    Serial.println(distance/100.);
-    Serial.print(">filteredDistance:");
-    Serial.println(filteredDistance/100.);
+    Serial.print(">offset:");  // Print label
+    Serial.println(lastOffset);  // Print offset value
+    Serial.print(">distance:");  // Print label
+    Serial.println(distance / 100.0);  // Print distance in cm
+    Serial.print(">filteredDistance:");  // Print label
+    Serial.println(filteredDistance / 100.0);  // Print filtered distance in cm
   }
 };
