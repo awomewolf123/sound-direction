@@ -1,0 +1,2 @@
+The sound-direction project:
+	To use this code, just copy it into VS code and then send it into an Arduino with 5 sound sensors - one for the distance, and four for the direction - four LED's, and an I2C LCD connected to it.
